@@ -24,8 +24,8 @@ func (r *sessionRepo) ByRefreshHash(ctx context.Context, hash []byte) (*domain.S
 	const op = "postgres.ByRefreshHash"
 
 	const query = `
-	    SELECT id, user_id, refresg_hash, issued_at, expires_at, revoke_at
-		from sessions
+	    SELECT id, user_id, refresh_hash, issued_at, expires_at, revoked_at
+		FROM sessions
 		WHERE refresh_hash = $1`
 
 	var s domain.Session

@@ -40,9 +40,21 @@ func New(cfg Config) *Limiter {
 	if cfg.MaxKeys < 1 {
 		panic("limiter: MaxKeys must be at least 1")
 	}
+
+	// Resolve the policy once, here, rather than letting each bucket do
+	// it on creation. Two things follow.
+	//
+	// A policy that cannot work refuses to start, instead of panicking
+	// on whichever request first happens to build a bucket — which under
+	// a policy that only one route can violate might be a week later.
+	//
+	// And Remaining, which answers from the policy for a caller with no
+	// bucket yet, reads the same ceiling the buckets do.
+	policy := cfg.Policy.Normalise()
+
 	return &Limiter{
 		buckets: make(map[string]*bucket.Bucket),
-		policy:  cfg.Policy,
+		policy:  policy,
 		maxKeys: cfg.MaxKeys,
 	}
 }

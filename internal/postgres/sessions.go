@@ -95,7 +95,14 @@ func (r *sessionRepo) RevokeAllForUser(ctx context.Context, userID int64, at tim
 	return nil
 }
 
-// revoked_at IS NULL: used here to keep sessions history avoiding overwriring older sessions
+// revoked_at IS NULL keeps the original revocation time: without it a
+// second revoke would overwrite the first, and the history of when a
+// session actually ended would be lost.
+//
+// It also makes the row count meaningful. No row matched means the
+// session is gone or was already revoked, and the caller is the only
+// one who can say whether that matters — a sign-out shrugs at it, a
+// refresh rotation must not.
 func (r *sessionRepo) Revoke(ctx context.Context, id string, at time.Time) error {
 	const op = "postgres.Revoke"
 
@@ -104,8 +111,12 @@ func (r *sessionRepo) Revoke(ctx context.Context, id string, at time.Time) error
 		SET revoked_at = $2
 		WHERE id = $1 AND revoked_at IS NULL`
 
-	if _, err := r.q.Exec(ctx, query, id, at); err != nil {
+	tag, err := r.q.Exec(ctx, query, id, at)
+	if err != nil {
 		return apperr.E(op, apperr.KindInternal, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return apperr.E(op, apperr.KindNotFound, nil)
 	}
 	return nil
 }

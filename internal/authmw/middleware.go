@@ -23,12 +23,21 @@ type RevocationStore interface {
 }
 
 type Config struct {
-	Codec            *token.Codec
-	IPLimit          *limiter.Limiter //unbounded
-	UserLimit        *limiter.Limiter //strict
-	Denylist         *bloom.Rotating
-	Revoked          RevocationStore
-	TrustProxy       bool //to use or ignore "x-Forwarded-For"
+	Codec     *token.Codec
+	IPLimit   *limiter.Limiter //unbounded
+	UserLimit *limiter.Limiter //strict
+	Denylist  *bloom.Rotating
+	Revoked   RevocationStore
+
+	// TrustedProxyHops is how many proxies of ours sit in front of this
+	// server. Zero ignores X-Forwarded-For entirely, which is the right
+	// default: on a port a caller can reach directly, the header is
+	// input from a stranger, and honouring it hands out a fresh identity
+	// per request.
+	//
+	// One knob, not two. A separate TrustProxy bool alongside it would
+	// mean two things to keep in step, and someone setting only the bool
+	// would believe they had turned the header on.
 	TrustedProxyHops int
 	Cost             func(*http.Request) float64
 	Now              func() time.Time
@@ -42,6 +51,20 @@ type Middleware struct {
 func New(cfg Config) *Middleware {
 	if cfg.Codec == nil || cfg.IPLimit == nil || cfg.UserLimit == nil {
 		panic("authmw: Codec, IPLimit and UserLimit are required")
+	}
+
+	// Revocation checking is on or off. Half of it is a wiring mistake,
+	// and both halves fail in ways nobody would notice at startup.
+	//
+	// A Denylist with no store to confirm its maybes dereferences a nil
+	// interface inside a request, on the first bloom hit — which is the
+	// first time anyone revokes anything, long after deployment.
+	//
+	// A store with no Denylist is quieter and worse: nothing ever
+	// consults it, so revoked sessions keep working until their access
+	// tokens expire, and the wiring looks correct the whole time.
+	if (cfg.Denylist == nil) != (cfg.Revoked == nil) {
+		panic("authmw: Denylist and Revoked must be supplied together")
 	}
 
 	if cfg.Now == nil {
@@ -58,7 +81,7 @@ func (m *Middleware) Handler(next http.Handler) http.Handler {
 		now := m.cfg.Now() //inject time once here
 		id, err := m.resolve(r, now)
 		if err != nil {
-			writeErr(w, err)
+			apperr.Write(w, err)
 			return
 		}
 		w.Header().Set("X-RateLimit-Remaining",
@@ -136,11 +159,28 @@ func clientAddr(r *http.Request, trustedHops int) (netip.Addr, error) {
 	if xff == "" {
 		return addrFromRemoteAddr(r)
 	}
-	parts := strings.SplitN(xff, ",", maxXFEntries)
+
+	// Split one past the cap, not at it. SplitN returns at most n
+	// elements and crams the rest into the last one, so splitting at
+	// maxXFEntries makes len(parts) > maxXFEntries impossible and the
+	// check below dead.
+	//
+	// Worse than dead. The counting is from the right, which is what
+	// makes a prepended entry harmless: index len-trustedHops is
+	// whatever the outermost trusted proxy recorded, however much the
+	// caller put in front of it. Truncating the slice destroys that —
+	// a caller who sends 84 entries ahead of 16 real proxies turns
+	// len-16 from "the address the outermost proxy saw" into index 0,
+	// which is theirs. The seventeenth element is the signal to stop,
+	// so it has to survive the split.
+	parts := strings.SplitN(xff, ",", maxXFEntries+1)
 	if len(parts) > maxXFEntries {
 		return addrFromRemoteAddr(r)
 	}
 
+	// From the right: the entry trustedHops back is the one the
+	// outermost proxy we control wrote. Everything to its left came
+	// from whoever was talking to that proxy, and none of it is ours
 	idx := len(parts) - trustedHops
 	if idx < 0 {
 		// Fewer entries than proxies we expect: either a
@@ -161,19 +201,4 @@ func addrFromRemoteAddr(r *http.Request) (netip.Addr, error) {
 		host = r.RemoteAddr
 	}
 	return netip.ParseAddr(host)
-}
-
-/* στο main todo
-srv := &http.Server{
-    MaxHeaderBytes: 8 << 10,
-}
-*/
-
-// authmw — γράφει text/plain
-func writeErr(w http.ResponseWriter, err error) {
-	status, msg := apperr.HTTPStatus(err)
-	if status == http.StatusTooManyRequests {
-		w.Header().Set("Retry-After", "1")
-	}
-	http.Error(w, msg, status)
 }

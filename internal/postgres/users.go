@@ -10,6 +10,8 @@ import (
 	"github.com/fotini85/tokenguard/internal/domain"
 )
 
+var _ domain.UserRepo = (*userRepo)(nil)
+
 type userRepo struct {
 	q querier
 }

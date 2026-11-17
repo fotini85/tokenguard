@@ -14,6 +14,15 @@ import (
 	"github.com/fotini85/tokenguard/internal/domain"
 )
 
+// The concrete types these interfaces were cut from. Declaring what a
+// handler needs is only worth something if the thing that supplies it
+// still fits: without these, a changed method on AuthService compiles
+// here and fails in main, one layer away from the change.
+var (
+	_ Auth      = (*domain.AuthService)(nil)
+	_ Registrar = (*domain.Registry)(nil)
+)
+
 // maxBody caps how much JSON a caller may send.
 //
 // Without it, one request can make the server read gigabytes into
@@ -76,13 +85,13 @@ type tokenPair struct {
 func (h *Handlers) register(w http.ResponseWriter, r *http.Request) {
 	var in credentials
 	if err := decode(w, r, &in); err != nil {
-		writeErr(w, err)
+		apperr.Write(w, err)
 		return
 	}
 
 	id, err := h.reg.Register(r.Context(), in.Email, in.Password)
 	if err != nil {
-		writeErr(w, err)
+		apperr.Write(w, err)
 		return
 	}
 
@@ -94,13 +103,13 @@ func (h *Handlers) register(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) login(w http.ResponseWriter, r *http.Request) {
 	var in credentials
 	if err := decode(w, r, &in); err != nil {
-		writeErr(w, err)
+		apperr.Write(w, err)
 		return
 	}
 
 	tokens, err := h.auth.Login(r.Context(), in.Email, in.Password)
 	if err != nil {
-		writeErr(w, err)
+		apperr.Write(w, err)
 		return
 	}
 
@@ -114,13 +123,13 @@ type refreshRequest struct {
 func (h *Handlers) refresh(w http.ResponseWriter, r *http.Request) {
 	var in refreshRequest
 	if err := decode(w, r, &in); err != nil {
-		writeErr(w, err)
+		apperr.Write(w, err)
 		return
 	}
 
 	tokens, err := h.auth.Refresh(r.Context(), in.RefreshToken)
 	if err != nil {
-		writeErr(w, err)
+		apperr.Write(w, err)
 		return
 	}
 
@@ -140,12 +149,12 @@ func (h *Handlers) refresh(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) logout(w http.ResponseWriter, r *http.Request) {
 	id := authmw.MustIdentity(r.Context())
 	if !id.Authenticated {
-		writeErr(w, apperr.E("httpapi.logout", apperr.KindBadSignature, nil))
+		apperr.Write(w, apperr.E("httpapi.logout", apperr.KindBadSignature, nil))
 		return
 	}
 
 	if err := h.auth.Revoke(r.Context(), id.SessionID); err != nil {
-		writeErr(w, err)
+		apperr.Write(w, err)
 		return
 	}
 

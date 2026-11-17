@@ -17,15 +17,22 @@ type Policy struct {
 	MaxCost float64
 }
 
-type Bucket struct {
-	mu           sync.Mutex
-	available    float64
-	maxAvailable float64
-	perSec       float64
-	lastChecked  time.Time
-}
-
-func New(p Policy, now time.Time) *Bucket {
+// Normalise fills in the fields a caller may leave at zero and panics on
+// a policy that could never work. It takes and returns a value, so the
+// caller's own copy is untouched.
+//
+// Separate from New because New is not the only place that needs the
+// resolved form. A limiter answers Remaining from the policy when a
+// caller has no bucket yet, and reading MaxAtOnce there while New
+// resolved it here would be the same rule written twice: a policy with
+// MaxAtOnce left at zero would report nought remaining to a caller whose
+// bucket, once built, is full.
+//
+// Panics rather than returning an error. Every one of these is a wiring
+// mistake, fixed by editing the program, and a limiter that resolves its
+// policy at construction turns all of them into a refusal to start
+// instead of a surprise on whichever request first builds a bucket.
+func (p Policy) Normalise() Policy {
 	if p.AllowedRequests < 1 {
 		panic("bucket: AllowedRequests must be at least 1")
 	}
@@ -38,6 +45,32 @@ func New(p Policy, now time.Time) *Bucket {
 	if p.MaxAtOnce < 1 {
 		panic("bucket: MaxAtOnce cannot be negative")
 	}
+	if p.MaxCost < 0 {
+		panic("bucket: MaxCost cannot be negative")
+	}
+
+	// Zero means undeclared, so there is nothing to check against. A
+	// declared cost above the ceiling is the thing worth catching: it
+	// describes a request that can never be afforded, which would show
+	// up as one endpoint answering 429 forever with nothing in the logs
+	// to say why.
+	if p.MaxCost > float64(p.MaxAtOnce) {
+		panic("bucket: MaxCost exceeds MaxAtOnce, so a request costing that much could never pass")
+	}
+
+	return p
+}
+
+type Bucket struct {
+	mu           sync.Mutex
+	available    float64
+	maxAvailable float64
+	perSec       float64
+	lastChecked  time.Time
+}
+
+func New(p Policy, now time.Time) *Bucket {
+	p = p.Normalise()
 
 	return &Bucket{
 		available:    float64(p.MaxAtOnce),
@@ -65,6 +98,10 @@ func (b *Bucket) AllowNAt(n float64, now time.Time) bool {
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
+	if n > b.maxAvailable {
+		panic("bucket: cost exceeds the bucket ceiling, so it could never be paid")
+	}
 
 	b.creditElapsedLocked(now)
 

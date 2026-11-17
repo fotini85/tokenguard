@@ -12,6 +12,11 @@ import (
 	"github.com/fotini85/tokenguard/internal/domain"
 )
 
+var (
+	_ domain.UnitOfWork = (*Store)(nil)
+	_ domain.Tx         = (*txView)(nil)
+)
+
 type Store struct {
 	pool *pgxpool.Pool
 }

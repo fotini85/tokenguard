@@ -58,16 +58,3 @@ func writeTokens(w http.ResponseWriter, t domain.Tokens) {
 		ExpiresAt: t.ExpiresAt.Unix(),
 	})
 }
-
-// writeErr turns a domain error into a status and a message.
-//
-// apperr.HTTPStatus flattens every authentication failure to the same
-// 401. Telling a caller that their password was wrong rather than that
-// the account does not exist would let them enumerate accounts.
-func writeErr(w http.ResponseWriter, err error) {
-	status, msg := apperr.HTTPStatus(err)
-	if status == http.StatusTooManyRequests {
-		w.Header().Set("Retry-After", "1")
-	}
-	writeJSON(w, status, map[string]string{"error": msg})
-}

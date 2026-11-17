@@ -1,6 +1,7 @@
 package apperr
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -83,4 +84,21 @@ func HTTPStatus(err error) (int, string) {
 	default:
 		return http.StatusInternalServerError, "internal error"
 	}
+}
+
+type errorBody struct {
+	Error string `json:"error"`
+}
+
+func Write(w http.ResponseWriter, err error) {
+	status, msg := HTTPStatus(err)
+
+	if status == http.StatusTooManyRequests {
+		w.Header().Set("Retry-After", "1")
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+
+	_ = json.NewEncoder(w).Encode(errorBody{Error: msg})
 }

@@ -124,12 +124,41 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (Tokens
 
 	u, err := s.users.ByEmail(ctx, email)
 	if err != nil {
-		// Hash anyway. Returning early for an unknown address makes the
-		// reply measurably faster than a wrong password does, which
-		// turns this endpoint into a way to find out which addresses
-		// have accounts.
-		s.hasher.Compare(dummyHash, password)
-		return Tokens{}, apperr.E(op, apperr.KindNotFound, err)
+		// A database failure is not a failed login. Flattening it in with
+		// the rest would answer 401 while the database is down, sending
+		// everyone to reset a password that was never the problem.
+		if apperr.KindOf(err) != apperr.KindNotFound {
+			return Tokens{}, apperr.E(op, apperr.KindInternal, err)
+		}
+
+		// From here on the address is simply unknown, and the caller must
+		// not be able to tell that apart from a wrong password.
+		//
+		// Two things have to match for that, not one. The time: returning
+		// without hashing makes this path measurably faster, so hash a
+		// throwaway. And the answer: the Kind decides the status code, so
+		// it is the same Kind the wrong-password branch below returns.
+		// KindNotFound here would mean 404 against the 401 of a wrong
+		// password, and one request per address would map every account
+		// on the service.
+		//
+		// The original error is still wrapped, so the logs can tell the
+		// two apart even though the response cannot.
+
+		// Hash rather than compare against a stored dummy. Both run 2^cost
+		// rounds of bcrypt, so either spends the right amount of CPU, but
+		// Hash takes its cost from the configured hasher. A dummy is a
+		// constant with a cost baked into it: raise the hasher to 12 and a
+		// cost-10 dummy leaves this path four times faster than the one
+		// below, which is the hole this line exists to close.
+		//
+		// Matched, not identical. bcrypt stores its cost inside every
+		// hash, so an account created under an older, cheaper setting
+		// still verifies at that cost until its next sign-in rehashes it.
+		// Timing is the weaker of the two defences for exactly this
+		// reason; the status code above is the one that holds.
+		_, _ = s.hasher.Hash(password)
+		return Tokens{}, apperr.E(op, apperr.KindBadSignature, err)
 	}
 
 	if err := s.hasher.Compare(u.PasswordHash, password); err != nil {
@@ -151,7 +180,14 @@ func (s *AuthService) Refresh(ctx context.Context, refresh string) (Tokens, erro
 
 	old, err := s.sessions.ByRefreshHash(ctx, hashToken(refresh))
 	if err != nil {
-		return Tokens{}, apperr.E(op, apperr.KindNotFound, err)
+		if apperr.KindOf(err) != apperr.KindNotFound {
+			return Tokens{}, apperr.E(op, apperr.KindInternal, err)
+		}
+		// A token nobody ever held and a token that has been revoked get
+		// the same answer. 404 here would confirm that a guessed token
+		// once existed, which is a bit of information per guess, and the
+		// guesses are free.
+		return Tokens{}, apperr.E(op, apperr.KindRevoked, err)
 	}
 	if !old.Live(now) {
 		return Tokens{}, apperr.E(op, apperr.KindRevoked, nil)
@@ -211,7 +247,22 @@ func (s *AuthService) issue(ctx context.Context, op string, userID int64, replac
 	err = s.uow.Do(ctx, func(tx Tx) error {
 		// tx.Sessions(), never s.sessions: the latter writes through
 		// the pool, auto-commits, and would survive a rollback.
+
 		if replaceID != "" {
+
+			// This is also the check, not just the write.
+			//
+			// The session was read and found live a moment ago, outside
+			// this transaction. Revoke matches on revoked_at IS NULL, so
+			// if it reports nothing changed, something ended the session
+			// in between — a sign-out everywhere, most likely, or the
+			// same refresh token arriving twice at once.
+			//
+			// Carrying on would insert a fresh live session on the
+			// strength of a refresh token that had already been
+			// cancelled, which is the one thing signing out everywhere
+			// is supposed to prevent. Returning the error rolls the
+			// whole rotation back.
 			if err := tx.Sessions().Revoke(ctx, replaceID, now); err != nil {
 				return err
 			}
@@ -229,6 +280,12 @@ func (s *AuthService) issue(ctx context.Context, op string, userID int64, replac
 		})
 	})
 	if err != nil {
+		// A rotation that found nothing live to replace is not a server
+		// fault — the refresh token simply is not good any more, which
+		// is the same answer as presenting a revoked one.
+		if apperr.KindOf(err) == apperr.KindNotFound {
+			return Tokens{}, apperr.E(op, apperr.KindRevoked, err)
+		}
 		return Tokens{}, apperr.E(op, apperr.KindInternal, err)
 	}
 
@@ -282,7 +339,3 @@ func hashToken(t string) []byte {
 	h := sha256.Sum256([]byte(t))
 	return h[:]
 }
-
-// dummyHash is a real bcrypt hash of a value nobody knows, used to keep
-// the unknown-account path as slow as the wrong-password one.
-var dummyHash = []byte("$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy")

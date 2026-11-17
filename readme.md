@@ -65,3 +65,20 @@ crypto/             υλοποιεί το Hasher
  └── έκδοση αλγορίθμου
 
 # extension point: bcrypt.Cost διαβάζει τον αριθμό από το hash
+
+#### Deferred: stateless rate limiting for anonymous callers
+
+Anonymous callers are an unbounded set, so one map entry each is the
+expensive part of limiting them. The plan was to put the bucket inside
+a signed token the caller carries, and keep no state at all.
+
+Signing stops them editing the numbers. It does not stop them dropping
+the token and being handed a full allowance, or replaying a copy with a
+healthy balance and a stale timestamp — and the refill is computed from
+that timestamp, so a stale one is worth more than a forged one would be.
+
+Catching either needs server-side state, which is what the design set
+out to avoid. The mechanism only works behind something that makes a
+fresh token cost the caller: a captcha, or a proof of work, issued when
+the IP limit is reached. Until that half exists, the IP limiter does
+this work and `token.KindAnon` stays reserved.

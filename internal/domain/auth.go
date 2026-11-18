@@ -244,6 +244,11 @@ func (s *AuthService) issue(ctx context.Context, op string, userID int64, replac
 		return Tokens{}, apperr.E(op, apperr.KindInternal, err)
 	}
 
+	// Collected inside the transaction, used after it commits. The
+	// filter cannot forget, so it must not hear about a revocation that
+	// might still be rolled back.
+	var revoked []string
+
 	err = s.uow.Do(ctx, func(tx Tx) error {
 		// tx.Sessions(), never s.sessions: the latter writes through
 		// the pool, auto-commits, and would survive a rollback.
@@ -266,10 +271,17 @@ func (s *AuthService) issue(ctx context.Context, op string, userID int64, replac
 			if err := tx.Sessions().Revoke(ctx, replaceID, now); err != nil {
 				return err
 			}
+			revoked = []string{replaceID}
 		} else {
-			if err := tx.Sessions().RevokeAllForUser(ctx, userID, now); err != nil {
+			// A fresh sign-in ends every other session this account has,
+			// and the filter has to hear about each one by name. Nothing
+			// is revoked on a first sign-in, which is why no row here is
+			// not an error.
+			ids, err := tx.Sessions().RevokeAllForUser(ctx, userID, now)
+			if err != nil {
 				return err
 			}
+			revoked = ids
 		}
 		return tx.Sessions().Insert(ctx, &Session{
 			ID:          sid,
@@ -290,10 +302,9 @@ func (s *AuthService) issue(ctx context.Context, op string, userID int64, replac
 	}
 
 	// Committed.
-	if replaceID != "" {
-		s.onRevoke(replaceID, now)
+	for _, id := range revoked {
+		s.onRevoke(id, now)
 	}
-
 	expires := now.Add(s.accessTTL)
 	access, err := s.signer.Sign(token.Claims{
 		Kind: token.KindAccess,

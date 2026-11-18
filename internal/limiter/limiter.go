@@ -105,6 +105,15 @@ func (l *Limiter) sweepLocked(now time.Time) {
 	}
 }
 
+// Limit is the ceiling a caller can hold at once, for the
+// X-RateLimit-Limit header. Without it, a Remaining of 3 says nothing:
+// three out of five is a healthy caller, three out of a hundred is one
+// about to be refused.
+//
+// No lock. The policy is resolved in New and never written again, so
+// there is nothing here that another goroutine could be changing.
+func (l *Limiter) Limit() int { return l.policy.MaxAtOnce }
+
 func (l *Limiter) Size() int {
 	l.mu.Lock()
 	defer l.mu.Unlock()

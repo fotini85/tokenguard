@@ -1,8 +1,3 @@
-// Command demo wires the pieces together and serves them.
-//
-// Everything in internal/ is written not to know what it is plugged
-// into. This is the one place that does: it reads configuration,
-// constructs each piece, and connects them. No logic lives here.
 package main
 
 import (

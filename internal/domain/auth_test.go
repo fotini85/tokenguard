@@ -61,7 +61,7 @@ func (panicSessions) ByRefreshHash(context.Context, []byte) (*domain.Session, er
 }
 func (panicSessions) Insert(context.Context, *domain.Session) error   { panic("unused") }
 func (panicSessions) Revoke(context.Context, string, time.Time) error { panic("unused") }
-func (panicSessions) RevokeAllForUser(context.Context, int64, time.Time) error {
+func (panicSessions) RevokeAllForUser(context.Context, int64, time.Time) ([]string, error) {
 	panic("unused")
 }
 func (panicSessions) IsRevoked(context.Context, string) (bool, error) { panic("unused") }
@@ -187,6 +187,10 @@ type recordingSessions struct {
 	session   *domain.Session // what ByRefreshHash finds
 	revokeErr error           // what Revoke reports
 
+	// liveForUser is what RevokeAllForUser finds and hands back: the
+	// account's other sessions, on other devices.
+	liveForUser []string
+
 	inserted []*domain.Session
 	revoked  []string
 }
@@ -208,8 +212,9 @@ func (s *recordingSessions) Revoke(_ context.Context, id string, _ time.Time) er
 	return s.revokeErr
 }
 
-func (s *recordingSessions) RevokeAllForUser(context.Context, int64, time.Time) error {
-	return nil
+func (s *recordingSessions) RevokeAllForUser(context.Context, int64, time.Time) ([]string, error) {
+	s.revoked = append(s.revoked, s.liveForUser...)
+	return s.liveForUser, nil
 }
 
 func (s *recordingSessions) IsRevoked(context.Context, string) (bool, error) {
@@ -350,5 +355,80 @@ func TestRefreshRejectsADeadSession(t *testing.T) {
 	}
 	if status, _ := apperr.HTTPStatus(err); status != http.StatusUnauthorized {
 		t.Errorf("status = %d, want %d", status, http.StatusUnauthorized)
+	}
+}
+
+// Signing in ends this account's other sessions, and the denylist has
+// to hear about every one of them by name.
+//
+// Until RevokeAllForUser returned ids there was nothing to name, so the
+// loop did not exist and only a rotated session was ever reported. The
+// sessions on the other devices were marked revoked in the database and
+// went on being honoured for the whole access token TTL, because the
+// filter answered "not revoked" and nothing asked the database.
+//
+// Which made the two ways of ending a session behave in opposite ways:
+// pressing sign-out cut a device off at once, while signing in
+// elsewhere — the thing someone does when they think an account is
+// compromised — left the intruder a full TTL of access.
+func TestLoginTellsTheDenylistAboutEverySessionItEnds(t *testing.T) {
+	now := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+
+	sessions := &recordingSessions{
+		liveForUser: []string{"laptop-session", "phone-session"},
+	}
+
+	var filtered []string
+	svc := domain.NewAuthService(domain.Config{
+		UoW:      fakeUoW{tx: fakeTx{sessions: sessions}},
+		Users:    &fakeUsers{user: &domain.User{ID: 7, Email: "a@b.c"}},
+		Sessions: sessions,
+		Hasher:   &fakeHasher{}, // nil error: the password matches
+		Signer:   fakeSigner{},
+		OnRevoke: func(sid string, _ time.Time) { filtered = append(filtered, sid) },
+		Now:      func() time.Time { return now },
+	})
+
+	if _, err := svc.Login(context.Background(), "a@b.c", "correct horse battery"); err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+
+	if len(filtered) != 2 {
+		t.Fatalf("denylist got %v, want both sessions: an unreported session "+
+			"keeps working until its access token expires", filtered)
+	}
+	for i, want := range sessions.liveForUser {
+		if filtered[i] != want {
+			t.Errorf("denylist[%d] = %q, want %q", i, filtered[i], want)
+		}
+	}
+}
+
+// A first sign-in revokes nothing, and nothing must be reported. A
+// bloom filter cannot delete, so a session id invented here would cost
+// that user a database lookup on every request until the window turns.
+func TestLoginTellsTheDenylistNothingWhenNothingWasLive(t *testing.T) {
+	now := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	sessions := &recordingSessions{} // no other sessions
+
+	var filtered []string
+	svc := domain.NewAuthService(domain.Config{
+		UoW:      fakeUoW{tx: fakeTx{sessions: sessions}},
+		Users:    &fakeUsers{user: &domain.User{ID: 7, Email: "a@b.c"}},
+		Sessions: sessions,
+		Hasher:   &fakeHasher{},
+		Signer:   fakeSigner{},
+		OnRevoke: func(sid string, _ time.Time) { filtered = append(filtered, sid) },
+		Now:      func() time.Time { return now },
+	})
+
+	if _, err := svc.Login(context.Background(), "a@b.c", "correct horse battery"); err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+	if len(filtered) != 0 {
+		t.Errorf("denylist got %v, want nothing", filtered)
+	}
+	if len(sessions.inserted) != 1 {
+		t.Errorf("inserted %d sessions, want 1", len(sessions.inserted))
 	}
 }

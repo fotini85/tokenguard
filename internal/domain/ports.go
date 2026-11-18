@@ -46,7 +46,7 @@ type SessionRepo interface {
 	ByRefreshHash(ctx context.Context, hash []byte) (*Session, error)
 	Insert(ctx context.Context, s *Session) error
 	Revoke(ctx context.Context, id string, at time.Time) error
-	RevokeAllForUser(ctx context.Context, userID int64, at time.Time) error
+	RevokeAllForUser(ctx context.Context, userID int64, at time.Time) ([]string, error)
 	IsRevoked(ctx context.Context, id string) (bool, error)
 }
 

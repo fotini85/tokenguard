@@ -80,19 +80,49 @@ func (r *sessionRepo) IsRevoked(ctx context.Context, id string) (bool, error) {
 }
 
 // RevokeAllForUser ends every live session for an account, which is
-// what a fresh sign-in does under one-session-per-user.
-func (r *sessionRepo) RevokeAllForUser(ctx context.Context, userID int64, at time.Time) error {
+// what a fresh sign-in does under one-session-per-user, and returns the
+// ids it ended so the caller can name them to the denylist.
+//
+// RETURNING in the statement that writes, so one scan does both and the
+// ids can never describe rows the write did not touch. No row count
+// check, unlike Revoke: this is a sweep, and a first sign-in having
+// nothing to revoke would otherwise mean no account could be used
+// twice.
+func (r *sessionRepo) RevokeAllForUser(ctx context.Context, userID int64, at time.Time) ([]string, error) {
 	const op = "postgres.RevokeAllForUser"
 
 	const query = `
 		UPDATE sessions
 		SET revoked_at = $2
-		WHERE user_id = $1 AND revoked_at IS NULL`
+		WHERE user_id = $1 AND revoked_at IS NULL
+		RETURNING id`
 
-	if _, err := r.q.Exec(ctx, query, userID, at); err != nil {
-		return apperr.E(op, apperr.KindInternal, err)
+	rows, err := r.q.Query(ctx, query, userID, at)
+	if err != nil {
+		return nil, apperr.E(op, apperr.KindInternal, err)
 	}
-	return nil
+	// Rows hold the connection until they are closed, and the caller
+	// writes again on this same transaction immediately after. Without
+	// this the next statement fails with "conn busy".
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, apperr.E(op, apperr.KindInternal, err)
+		}
+		ids = append(ids, id)
+	}
+
+	// Next reports false both at the end of the results and on failure,
+	// so without this a connection dropped halfway through reads as a
+	// short list and the sessions it did not name stay honoured.
+	if err := rows.Err(); err != nil {
+		return nil, apperr.E(op, apperr.KindInternal, err)
+	}
+
+	return ids, nil
 }
 
 // revoked_at IS NULL keeps the original revocation time: without it a

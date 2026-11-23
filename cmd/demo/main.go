@@ -85,6 +85,33 @@ func run() error {
 
 	denylist := bloom.NewRotating(10_000, 0.001, denylistWindow, now())
 
+	// A restart leaves the filter empty, and an empty filter answers
+	// "not revoked" to everything — so nothing would ask the database
+	// and a session revoked moments before a deploy would be honoured
+	// again until its access token expired.
+	//
+	// The bits cannot be saved and reloaded: the hashes behind them are
+	// seeded per process, deliberately, so that nobody can work out
+	// offline which ids collide. So the filter is rebuilt from the
+	// database instead, which is the authority anyway.
+	//
+	// Two windows back, because Rotating keeps two filters and the
+	// older one would still have held that much. Further back concerns
+	// tokens that have already expired on their own.
+	warmCtx, cancelWarm := context.WithTimeout(ctx, 10*time.Second)
+	revoked, err := store.Sessions().RevokedSince(warmCtx, now().Add(-2*denylistWindow))
+	cancelWarm()
+	if err != nil {
+		// Fatal on purpose. Carrying on would start a server that
+		// silently honours revoked sessions, which is worse than not
+		// starting: a failed deploy rolls back, a quiet hole does not.
+		return fmt.Errorf("warming denylist: %w", err)
+	}
+	for _, id := range revoked {
+		denylist.Add(id, now())
+	}
+	log.Info("denylist warmed", "sessions", len(revoked))
+
 	// --- domain -----------------------------------------------------
 
 	hasher := crypto.NewBcrypt(12)

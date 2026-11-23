@@ -54,6 +54,9 @@ func New(n int, p float64) *Filter {
 
 	mf := -float64(n) * math.Log(p) / (math.Ln2 * math.Ln2)
 	m := nextPow2(uint64(math.Ceil(mf)))
+	if m < 64 {
+		m = 64
+	}
 
 	k := int(math.Round(float64(m) / float64(n) * math.Ln2))
 	if k < 1 {

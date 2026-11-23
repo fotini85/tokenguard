@@ -119,7 +119,9 @@ func (b *Bucket) AllowAt(now time.Time) bool {
 
 func (b *Bucket) creditElapsedLocked(now time.Time) {
 	elapsed := now.Sub(b.lastChecked)
-
+	//Monotonic reading is being lost in 3 cases:t.Round(), t.Truncate(),
+	//JSON serialization and time.Date usage so this is why elapsed is
+	// checked against negative time
 	if elapsed <= 0 {
 		b.lastChecked = now
 		return

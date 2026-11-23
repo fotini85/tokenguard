@@ -65,6 +65,12 @@ func (panicSessions) RevokeAllForUser(context.Context, int64, time.Time) ([]stri
 	panic("unused")
 }
 func (panicSessions) IsRevoked(context.Context, string) (bool, error) { panic("unused") }
+func (panicSessions) RevokedSince(context.Context, time.Time) ([]string, error) {
+	panic("unused")
+}
+func (s *recordingSessions) RevokedSince(context.Context, time.Time) ([]string, error) {
+	panic("unused: warming happens in main, not in a service")
+}
 
 type panicUoW struct{}
 

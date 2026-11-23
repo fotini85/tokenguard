@@ -215,6 +215,16 @@ Defended:
 
 Not defended, and known:
 
+- **The key table is first come, first served.** When it is full, a
+  caller with no bucket yet is refused, whatever they have or have not
+  done. Nothing evicts a bucket that still owes allowance, so a caller
+  who keeps theirs drained holds their slot, and the sweep that runs
+  first is `O(MaxKeys)` under the limiter lock. Measured at
+  `MaxKeys = 65536`: 2.7ms for a new key against 45ns for a known one,
+  which caps the whole limiter near 365 req/s for as long as the table
+  stays full. Failing closed is the choice; the cost is paid by whoever
+  arrives next.
+
 - **Registration reveals existence.** `/auth/register` answers 409 for
   an address that already has an account. Closing it needs email
   verification, which is out of scope for a library. The cost-10 rate
@@ -243,6 +253,33 @@ when the IP limit is reached. Until that half exists, the IP limiter
 does this work and `token.KindAnon` stays reserved.
 
 ---
+
+
+## Deferred: shedding anonymous callers first
+
+The two limiters have key spaces that cost the caller very different
+amounts to enlarge. A new IP key is free — change address. A new user
+key goes through `/auth/register`, which runs bcrypt and is rate
+limited like everything else. So the obvious move when the IP table is
+full is to keep serving callers who carry a valid token and shed the
+rest: the account is a stricter and more accurate ledger for them than
+the address, and `UserLimit` is already holding it.
+
+The reason it is not here is that it protects the wrong half. `login`
+and `register` are where the bcrypt cost lives, and nobody holds a
+token when they call them, so degrading to authenticated-only leaves
+the expensive endpoints exactly as exposed as before. It would keep
+existing subscribers working through an attack, which is worth
+something, but it moves the capacity problem onto people who do not yet
+have an account rather than removing it.
+
+It also needs state this library does not have: a declared degraded
+mode, a rule for leaving it, and hysteresis so the two do not flap.
+`Stats` reporting `atCapacity` is the signal such a mode would read;
+acting on it is left to the caller.
+
+---
+
 
 ## What is deliberately absent
 

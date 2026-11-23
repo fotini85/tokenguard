@@ -68,8 +68,30 @@ func (l *Limiter) Allow(key string, cost float64, now time.Time) bool {
 		if len(l.buckets) >= l.maxKeys {
 			l.sweepLocked(now)
 		}
-		//Checked again: the sweep may have freed nothing, which is
-		// what an active attack looks like.
+		// Checked again: the sweep may have freed nothing, which is what
+		// an active attack looks like.
+		//
+		// Refusing here turns away a caller who has spent nothing and
+		// broken no limit. That is deliberate. The alternative — admit
+		// them because the table is full — makes filling the table the
+		// bypass: one map entry per address until there is no room, and
+		// from that point everybody passes unmetered. A limiter that
+		// fails open under pressure is not a limiter.
+		//
+		// The cost is that the refusal is indiscriminate. It does not
+		// land on whoever filled the table, it lands on whoever arrives
+		// next: attacker and new subscriber alike, same code, same
+		// answer. And since the only eviction here is "drop the buckets
+		// that are full", a caller who keeps their buckets drained keeps
+		// their slot. Occupancy is first come, first served, with no
+		// queue behind it.
+		//
+		// Both are accepted rather than fixed. Evicting a bucket that
+		// still owes something would forgive that debt, which is the one
+		// thing this table exists to prevent. And recency is the wrong
+		// signal for choosing a victim: a caller serving out a 429 is
+		// silent by construction, so an LRU would evict precisely the
+		// callers being limited and hand them a full bucket on return.
 		if len(l.buckets) >= l.maxKeys {
 			l.deniedAtCapacity++
 			return false

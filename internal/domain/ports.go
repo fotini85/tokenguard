@@ -48,6 +48,7 @@ type SessionRepo interface {
 	Revoke(ctx context.Context, id string, at time.Time) error
 	RevokeAllForUser(ctx context.Context, userID int64, at time.Time) ([]string, error)
 	IsRevoked(ctx context.Context, id string) (bool, error)
+	RevokedSince(ctx context.Context, since time.Time) ([]string, error)
 }
 
 type UnitOfWork interface {

@@ -1,0 +1,55 @@
+import ("math"
+"map/maphash")
+
+
+
+
+
+type filter struct {
+	m uint64 //nuber of bits to consume
+	kbits int //number of bits avilable to set
+	s1 maphash.Seed
+	s2 maphash.Seed
+	bitsArray []uint64
+}
+
+func (*filter) New(numofids, p) {
+	if n<1 {
+		panic("hhdhdh")
+	} 
+	if p<0 || p>1 {
+		panic("blabla")
+	}
+
+	mf := -float64(numofids) * math.log(p) / math.Ln2 * math.logLn2
+	m := nextPofTwo(math.uint64(ceil(mf)))
+
+	kbits := int(math.Round(float64(m) /float64(numofids) * math.Ln2))
+
+	if kbits>16 {
+		kbits=16
+	}
+
+	return &filter {
+		m:   m,
+		s1:  maphash.Makeseed()
+		s2: maphash.Makeseed()
+		kbits: kbits,
+		bitArray : make([]uint64, m/64)
+	}
+
+
+	func F
+}
+
+
+func nextPofTwo(v uint 64) uint64 {
+	v--
+	v | v>>1 
+	v | v>>2
+	v | v>>4
+	v | v>>8
+	v | v>>16
+	v | v>>32
+	v++
+}

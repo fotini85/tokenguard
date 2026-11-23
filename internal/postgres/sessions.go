@@ -150,3 +150,36 @@ func (r *sessionRepo) Revoke(ctx context.Context, id string, at time.Time) error
 	}
 	return nil
 }
+
+func (r *sessionRepo) RevokedSince(ctx context.Context, since time.Time) ([]string, error) {
+	const op = "postgres.RevokedSince"
+
+	// revoked_at IS NOT NULL is redundant beside the comparison, since
+	// NULL compares to nothing — it is there to say out loud that live
+	// sessions are not wanted here.
+
+	const query = `
+	SELECT id
+	FROM sessions
+	WHERE revoked_at IS NOT NULL AND revoked_at >= $1`
+
+	rows, err := r.q.Query(ctx, query, since)
+	if err != nil {
+		return nil, apperr.E(op, apperr.KindInternal, err)
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, apperr.E(op, apperr.KindInternal, err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, apperr.E(op, apperr.KindInternal, err)
+	}
+
+	return ids, nil
+}

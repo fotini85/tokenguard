@@ -83,7 +83,7 @@ func run() error {
 
 	// --- revocation denylist ----------------------------------------
 
-	denylist := bloom.NewRotating(10_000, 0.001, denylistWindow, now())
+	denylist := bloom.NewRotating(10_000, 0.001, denylistWindow, now)
 
 	// A restart leaves the filter empty, and an empty filter answers
 	// "not revoked" to everything — so nothing would ask the database
@@ -108,7 +108,7 @@ func run() error {
 		return fmt.Errorf("warming denylist: %w", err)
 	}
 	for _, id := range revoked {
-		denylist.Add(id, now())
+		denylist.Add(id)
 	}
 	log.Info("denylist warmed", "sessions", len(revoked))
 
@@ -129,8 +129,8 @@ func run() error {
 		// This is where the domain reaches the bloom filter without
 		// importing it. The service calls onRevoke after a revocation
 		// commits; what happens then is decided here.
-		OnRevoke: func(sid string, at time.Time) {
-			denylist.Add(sid, at)
+		OnRevoke: func(sid string, _ time.Time) {
+			denylist.Add(sid)
 		},
 	})
 

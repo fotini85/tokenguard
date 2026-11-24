@@ -131,7 +131,7 @@ func (m *Middleware) resolve(r *http.Request, now time.Time) (Identity, error) {
 	if err != nil {
 		return Identity{}, apperr.E(op, apperr.KindOf(err), err)
 	}
-	if m.cfg.Denylist != nil && m.cfg.Denylist.MayContain(cl.SessionID, now) {
+	if m.cfg.Denylist != nil && m.cfg.Denylist.MayContain(cl.SessionID) {
 		revoked, err := m.cfg.Revoked.IsRevoked(r.Context(), cl.SessionID)
 		if err != nil {
 			return Identity{}, apperr.E(op, apperr.KindInternal, err)

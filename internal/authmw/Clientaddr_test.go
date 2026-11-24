@@ -239,7 +239,7 @@ func validConfig() Config {
 // so revoked sessions keep working and nothing looks wrong.
 func TestNewRequiresRevocationWiredWholeOrNotAtAll(t *testing.T) {
 	denylist := func() *bloom.Rotating {
-		return bloom.NewRotating(8, 0.01, time.Minute, time.Now())
+		return bloom.NewRotating(8, 0.01, time.Minute, time.Now)
 	}
 
 	tests := []struct {

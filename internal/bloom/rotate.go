@@ -32,13 +32,30 @@ type Rotating struct {
 	p        float64
 	window   time.Duration
 	rotateAt time.Time
+
+	// now is the one clock this pair uses, taken at construction.
+	//
+	// Not a parameter on Add and MayContain, as it once was. rotateAt is
+	// state, recomputed from whatever time triggers a rotation, so a
+	// caller passing a time that is not current — a serialized one, a
+	// rounded one, a frozen one from a test — moves the schedule for
+	// every caller that follows, and keeps it moved. One clock the
+	// callers cannot reach removes that by construction instead of
+	// guarding against it.
+	//
+	// A function rather than a time.Time, because the pair outlives any
+	// one moment.
+	now func() time.Time
 }
 
 // NewRotating builds a rotating pair sized for n entries per window at
 // a false positive rate of p.
-func NewRotating(n int, p float64, window time.Duration, now time.Time) *Rotating {
+func NewRotating(n int, p float64, window time.Duration, now func() time.Time) *Rotating {
 	if window <= 0 {
 		panic("bloom: window must be positive")
+	}
+	if now == nil {
+		panic("bloom: now is required")
 	}
 	return &Rotating{
 		current:  New(n, p),
@@ -46,16 +63,17 @@ func NewRotating(n int, p float64, window time.Duration, now time.Time) *Rotatin
 		n:        n,
 		p:        p,
 		window:   window,
-		rotateAt: now.Add(window),
+		now:      now,
+		rotateAt: now().Add(window),
 	}
 }
 
 // Add records s in the current filter.
-func (r *Rotating) Add(s string, now time.Time) {
+func (r *Rotating) Add(s string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.rotateIfDueLocked(now)
+	r.rotateIfDueLocked()
 	r.current.Add(s)
 }
 
@@ -68,11 +86,11 @@ func (r *Rotating) Add(s string, now time.Time) {
 // can trigger a rotation. Checking under RLock and upgrading would
 // leave a window where two goroutines both decide to rotate, and the
 // second would discard a filter the first had just promoted.
-func (r *Rotating) MayContain(s string, now time.Time) bool {
+func (r *Rotating) MayContain(s string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.rotateIfDueLocked(now)
+	r.rotateIfDueLocked()
 	return r.current.MayContain(s) || r.previous.MayContain(s)
 }
 
@@ -91,7 +109,9 @@ func (r *Rotating) MayContain(s string, now time.Time) bool {
 // filters, so looping further would change nothing.
 //
 // The caller must hold r.mu.
-func (r *Rotating) rotateIfDueLocked(now time.Time) {
+
+func (r *Rotating) rotateIfDueLocked() {
+	now := r.now() // the pair's own clock; see the field for why not a parameter
 	if now.Before(r.rotateAt) {
 		return
 	}

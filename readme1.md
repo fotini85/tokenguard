@@ -215,6 +215,14 @@ Defended:
 
 Not defended, and known:
 
+
+- **The sessions table never shrinks on its own.** Every login leaves a
+  revoked row behind, and a revoke writes a second tuple rather than
+  changing the first. `migrations/002_prune.sql` ships
+  `prune_sessions(grace, batch)` for it, batched and committing between
+  batches so replication keeps up; scheduling it is the operator's job.
+  Nothing here deletes from your database on a timer of its own.
+
 - **The key table is first come, first served.** When it is full, a
   caller with no bucket yet is refused, whatever they have or have not
   done. Nothing evicts a bucket that still owes allowance, so a caller
